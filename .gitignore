@@ -1,0 +1,8 @@
+build/
+Testing/
+tests/__pycache__/
+*.pyc
+data/
+*.pem
+*.key
+*.log

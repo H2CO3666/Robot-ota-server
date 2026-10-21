@@ -1,0 +1,35 @@
+{
+  "data_dir": "../data",
+  "device": {
+    "robot_sn": "AS2_000001",
+    "product_id": "AS2",
+    "hw_revision": "REV_A",
+    "firmware_version": "2.4.0",
+    "security_version": 0,
+    "max_plaintext_bytes": 16777216,
+    "max_chunk_bytes": 100000
+  },
+  "crypto": {
+    "key_provider": "software",
+    "device_private_key_file": "device_key.pem",
+    "plat_ca_file": "plat_ca.pem",
+    "signature_scheme": "RSA_PKCS1_SHA256",
+    "sign_domain_prefix": "ROBOT_OFFLINE_OTA_MANIFEST_V1",
+    "check_cert_validity": true
+  },
+  "http": {
+    "bind": "127.0.0.1",
+    "port": 8080,
+    "threads": 2,
+    "max_body_bytes": 8388608,
+    "idle_timeout_seconds": 30,
+    "max_queued_connections": 16,
+    "max_header_bytes": 65536
+  },
+  "session": {
+    "receiving_ttl_hours": 24
+  },
+  "install": {
+    "engine": "disabled"
+  }
+}
