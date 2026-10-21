@@ -19,9 +19,12 @@ namespace robot_ota {
 namespace {
 
 std::mutex g_log_mutex;
+std::mutex g_upgrade_mutex;
 bool g_verbose = false;
+int g_log_fd = -1;
+int g_upgrade_log_fd = -1;
 
-void log_line(const char* level, const std::string& message) {
+std::string make_log_line(const char* level, const std::string& message) {
   const auto now = std::chrono::system_clock::now();
   const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                       now.time_since_epoch()) %
@@ -31,10 +34,53 @@ void log_line(const char* level, const std::string& message) {
   localtime_r(&t, &tm);
   char stamp[32];
   std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &tm);
+  char msbuf[8];
+  std::snprintf(msbuf, sizeof(msbuf), "%03d", static_cast<int>(ms.count()));
+  std::string line;
+  line.reserve(message.size() + 64);
+  line += stamp;
+  line += '.';
+  line += msbuf;
+  line += " [";
+  line += level;
+  line += "] ";
+  line += message;
+  line += '\n';
+  return line;
+}
 
+// Best-effort append: a full disk or a closed fd must never crash the server.
+void append_ignore_errors(int fd, const std::string& text) {
+  const char* p = text.data();
+  size_t remaining = text.size();
+  while (remaining > 0) {
+    const ssize_t n = ::write(fd, p, remaining);
+    if (n < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return;
+    }
+    if (n == 0) {
+      return;
+    }
+    p += static_cast<size_t>(n);
+    remaining -= static_cast<size_t>(n);
+  }
+}
+
+int open_append_log(const std::string& path) {
+  return ::open(path.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+}
+
+void log_line(const char* level, const std::string& message) {
+  const std::string line = make_log_line(level, message);
   std::lock_guard<std::mutex> lock(g_log_mutex);
-  std::cerr << stamp << "." << static_cast<int>(ms.count()) << " [" << level
-            << "] " << message << std::endl;
+  std::cerr << line;
+  std::cerr.flush();
+  if (g_log_fd >= 0) {
+    append_ignore_errors(g_log_fd, line);
+  }
 }
 
 std::string errno_string() { return std::strerror(errno); }
@@ -70,6 +116,41 @@ void log_error(const std::string& message) { log_line("ERROR", message); }
 void log_debug(const std::string& message) {
   if (g_verbose) {
     log_line("DEBUG", message);
+  }
+}
+
+void configure_logging(const std::string& dir) {
+  if (dir.empty()) {
+    return;
+  }
+  try {
+    ensure_dir(dir, 0755);
+  } catch (const std::exception& e) {
+    std::cerr << "failed to create log directory " << dir << ": " << e.what()
+              << std::endl;
+    return;
+  }
+  const int server_fd = open_append_log(join_path(dir, "server.log"));
+  const int ota_fd = open_append_log(join_path(dir, "ota.log"));
+  std::lock_guard<std::mutex> lock(g_log_mutex);
+  if (g_log_fd >= 0) {
+    ::close(g_log_fd);
+  }
+  if (g_upgrade_log_fd >= 0) {
+    ::close(g_upgrade_log_fd);
+  }
+  g_log_fd = server_fd;
+  g_upgrade_log_fd = ota_fd;
+  if (server_fd < 0 || ota_fd < 0) {
+    std::cerr << "failed to open log files under " << dir << std::endl;
+  }
+}
+
+void log_upgrade(const std::string& message) {
+  const std::string line = make_log_line("OTA", message);
+  std::lock_guard<std::mutex> lock(g_upgrade_mutex);
+  if (g_upgrade_log_fd >= 0) {
+    append_ignore_errors(g_upgrade_log_fd, line);
   }
 }
 

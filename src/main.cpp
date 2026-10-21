@@ -105,6 +105,8 @@ int main(int argc, char** argv) {
     return 0;
   }
 
+  robot_ota::configure_logging(config.log.dir);
+
   // Block the shutdown signals before any thread is created so every thread
   // inherits the mask. The main thread receives them synchronously with
   // sigwait().

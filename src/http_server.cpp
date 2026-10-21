@@ -243,7 +243,7 @@ void require_content_type(const http::request<Body>& request,
   if (value.empty()) {
     return;
   }
-  if (!starts_with_ci(value.to_string(), expected)) {
+  if (!starts_with_ci(std::string(value), expected)) {
     throw OtaError(415, code,
                    "unsupported Content-Type; expected " + expected);
   }
@@ -541,7 +541,7 @@ void HttpServer::handle_connection(SocketPtr socket) {
 
     const unsigned version = parser.get().version();
     const bool keep_alive = parser.get().keep_alive();
-    const Route route = parse_route(parser.get().target().to_string());
+    const Route route = parse_route(std::string(parser.get().target()));
 
     if (route.kind == RouteKind::None) {
       drain_before_close = true;
@@ -577,8 +577,8 @@ void HttpServer::handle_connection(SocketPtr socket) {
     const beast::string_view expect = parser.get()[http::field::expect];
     const bool has_expect_continue =
         !expect.empty() && equals_ci(expect, "100-continue");
-    log_debug("request " + std::string(parser.get().method_string().to_string()) +
-              " " + parser.get().target().to_string() + " content_length=" +
+    log_debug("request " + std::string(parser.get().method_string()) +
+              " " + std::string(parser.get().target()) + " content_length=" +
               (content_length ? std::to_string(*content_length) : "none") +
               " chunked=" + (parser.chunked() ? "yes" : "no") +
               " body_limit=" + std::to_string(body_limit));
@@ -714,12 +714,12 @@ void HttpServer::handle_connection(SocketPtr socket) {
           static_cast<http::status>(e.http_status()), version, keep_alive,
           e.code(), e.what(), request.method() == http::verb::head);
       close_after = !ok || !keep_alive;
-      log_warn(remote + " " + request.method_string().to_string() + " " +
-               request.target().to_string() + " -> " +
+      log_warn(remote + " " + std::string(request.method_string()) + " " +
+               std::string(request.target()) + " -> " +
                std::to_string(e.http_status()) + " " + e.code());
     } catch (const std::exception& e) {
-      log_error(remote + " " + request.method_string().to_string() + " " +
-                request.target().to_string() + " failed: " + e.what());
+      log_error(remote + " " + std::string(request.method_string()) + " " +
+                std::string(request.target()) + " failed: " + e.what());
       const bool ok = send_error(http::status::internal_server_error, version,
                                  keep_alive, "INTERNAL_ERROR",
                                  "internal server error",

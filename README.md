@@ -60,8 +60,8 @@ python3 tests/integration_test.py --server build/robot-ota-server   # 集成测�
 
 示例：
 
-- `config/server.example.json`：生产模板（`key_provider=se`，绝对路径）。
-- `config/server.dev.example.json`：开发模板（`key_provider=software`，`data_dir=../data`）。
+- `config/server.example.jsonc`：生产模板（`key_provider=se`，绝对路径）。
+- `config/server.dev.example.jsonc`：开发模板（`key_provider=software`，`data_dir=../data`）。
 
 字段说明：
 

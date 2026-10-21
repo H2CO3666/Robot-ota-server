@@ -19,6 +19,17 @@ void log_warn(const std::string& message);
 void log_error(const std::string& message);
 void log_debug(const std::string& message);
 
+// Opens the append-only log files <dir>/server.log (runtime log) and
+// <dir>/ota.log (upgrade records). An empty dir disables file logging and keeps
+// stderr output only. This is best-effort: if the directory cannot be created
+// the server keeps running with stderr logging.
+void configure_logging(const std::string& dir);
+
+// Appends one upgrade lifecycle record to <dir>/ota.log. The line is
+// timestamped and prefixed with the [OTA] level. Pass a message of key=value
+// tokens, e.g. "session=ota_xxx package=pkg version=1.0 event=CREATED".
+void log_upgrade(const std::string& message);
+
 // ---------------------------------------------------------------------------
 // Time / random / encoding
 // ---------------------------------------------------------------------------

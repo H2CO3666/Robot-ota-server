@@ -17,6 +17,15 @@ namespace {
 
 constexpr size_t kConfigFileLimit = 1024 * 1024;
 
+// Platform identity files present on production robots. When a file exists it
+// overrides the corresponding device.* config value; the config value remains
+// the fallback for development and integration tests.
+constexpr const char* kRobotSnPath = "/unitree/robot/basic/code";
+constexpr const char* kProductModelPath =
+    "/unitree/module/network_manager/upper_bluetooth/model";
+constexpr const char* kVersionJsonPath =
+    "/unitree/robot/pkg/version/version.json";
+
 bool has_control_chars(const std::string& value) {
   for (unsigned char c : value) {
     if (c < 0x20 || c == 0x7f) {
@@ -104,6 +113,79 @@ void require_existing_file(const std::string& path, const char* what) {
   if (::stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) {
     throw std::runtime_error(std::string(what) + " does not exist or is not a file: " +
                              path);
+  }
+}
+
+bool regular_file_exists(const std::string& path) {
+  struct stat st {};
+  return ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+std::string trim_ascii_whitespace(std::string value) {
+  size_t begin = 0;
+  size_t end = value.size();
+  while (begin < end) {
+    const unsigned char c = static_cast<unsigned char>(value[begin]);
+    if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+      break;
+    }
+    ++begin;
+  }
+  while (end > begin) {
+    const unsigned char c = static_cast<unsigned char>(value[end - 1]);
+    if (c != ' ' && c != '\t' && c != '\r' && c != '\n') {
+      break;
+    }
+    --end;
+  }
+  return value.substr(begin, end - begin);
+}
+
+// Production robots carry their identity in well-known platform files. Override
+// the config fallbacks with those files when they are present, so a single
+// generic config can run unchanged across units.
+void apply_platform_identity(AppConfig& cfg) {
+  // robot_sn is a plain text serial number.
+  if (regular_file_exists(kRobotSnPath)) {
+    const std::string sn =
+        trim_ascii_whitespace(read_text_file_limited(kRobotSnPath, 256));
+    if (!sn.empty()) {
+      cfg.device.robot_sn = sn;
+      log_info("robot_sn overridden from " + std::string(kRobotSnPath));
+    }
+  }
+
+  // product_id is the Bluetooth model name with its trailing '_' stripped.
+  if (regular_file_exists(kProductModelPath)) {
+    std::string model = trim_ascii_whitespace(
+        read_text_file_limited(kProductModelPath, 256));
+    if (!model.empty() && model.back() == '_') {
+      model.pop_back();
+    }
+    if (!model.empty()) {
+      cfg.device.product_id = model;
+      log_info("product_id overridden from " + std::string(kProductModelPath));
+    }
+  }
+
+  // firmware_version is the "Package" field of the platform version manifest.
+  if (regular_file_exists(kVersionJsonPath)) {
+    const std::string text = read_text_file_limited(kVersionJsonPath, 64 * 1024);
+    Json::CharReaderBuilder builder;
+    std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+    Json::Value root;
+    std::string errors;
+    if (reader->parse(text.data(), text.data() + text.size(), &root, &errors) &&
+        root.isObject() && root.isMember("Package") &&
+        root["Package"].isString()) {
+      const std::string package =
+          trim_ascii_whitespace(root["Package"].asString());
+      if (!package.empty()) {
+        cfg.device.firmware_version = package;
+        log_info("firmware_version overridden from " +
+                 std::string(kVersionJsonPath));
+      }
+    }
   }
 }
 
@@ -231,6 +313,7 @@ AppConfig load_config(const std::string& path) {
 
   Json::CharReaderBuilder builder;
   builder["collectComments"] = false;
+  builder["allowComments"] = true;
   builder["strictMode"] = true;
   builder["rejectDupKeys"] = true;
   builder["stackLimit"] = 32;
@@ -337,6 +420,12 @@ AppConfig load_config(const std::string& path) {
     cfg.install.engine = get_string(install, "engine", cfg.install.engine);
   }
 
+  const Json::Value& log = get_object(root, "log");
+  if (!log.isNull()) {
+    cfg.log.dir = resolve_path(cfg.config_dir, get_string(log, "dir", cfg.log.dir));
+  }
+
+  apply_platform_identity(cfg);
   validate_config(cfg);
   return cfg;
 }

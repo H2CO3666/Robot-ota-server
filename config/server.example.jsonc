@@ -1,0 +1,77 @@
+{
+  // 数据目录：会话、payload、固件等持久化数据都放这里
+  "data_dir": "/var/lib/robot-ota",
+
+  // 日志目录：server.log（运行日志）+ ota.log（升级记录）。留空则不写文件
+  "log": {
+    "dir": "/unitree/var/log/robot_offline_server"
+  },
+
+  "device": {
+    // 以下 robot_sn / product_id / firmware_version 在真机上会被平台文件覆盖：
+    //   robot_sn        <- /unitree/robot/basic/code
+    //   product_id      <- /unitree/module/network_manager/upper_bluetooth/model（去掉末尾下划线）
+    //   firmware_version<- /unitree/robot/pkg/version/version.json 的 Package 字段
+    "robot_sn": "AS2_000001",
+    "product_id": "AS2",
+    "hw_revision": "REV_A",
+    "firmware_version": "2.4.0",
+    // 安全版本号：低于 min_security_version 的固件会被拒绝（防降级）
+    "security_version": 0,
+    // 解密后固件的最大字节数
+    "max_plaintext_bytes": 4294967296,
+    // 单个 payload 分片（PATCH 请求体）的最大字节数
+    "max_chunk_bytes": 4194304
+  },
+
+  "crypto": {
+    // 密钥来源：se=安全芯片（生产），software=本地 PEM 私钥（开发/测试）
+    "key_provider": "se",
+    // software 模式下的设备私钥路径（se 模式下留空）
+    "device_private_key_file": "",
+    // 平台 CA 证书（验签用）。se 模式且 export_platform_ca=true 时可留空
+    "plat_ca_file": "/etc/robot-ota/plat_ca.pem",
+    // 清单签名算法：RSA_PKCS1_SHA256 或 RSA_PSS_SHA256，须与云端一致
+    "signature_scheme": "RSA_PKCS1_SHA256",
+    // 签名的域分隔前缀
+    "sign_domain_prefix": "ROBOT_OFFLINE_OTA_MANIFEST_V1",
+    // 是否校验签名者证书有效期
+    "check_cert_validity": true
+  },
+
+  // 安全芯片（仅 key_provider=se 时生效）
+  "se": {
+    // SE SDK 动态库路径
+    "lib_path": "/unitree/lib/libsesdk.so",
+    // SE 中 RSA 签名密钥的索引
+    "key_index": 1,
+    // 是否从 SE 导出平台 CA 证书（true 时可不配 plat_ca_file）
+    "export_platform_ca": false
+  },
+
+  "http": {
+    // 监听地址：0.0.0.0 表示所有网卡
+    "bind": "0.0.0.0",
+    "port": 8080,
+    // 处理请求的 worker 线程数 = 同时处理的请求数上限
+    "threads": 1,
+    // 请求体（body）总大小上限，超过返回 413
+    "max_body_bytes": 8388608,
+    // 连接空闲超时（秒），超过无数据则断开
+    "idle_timeout_seconds": 60,
+    // 已建立但还没轮到 worker 处理的连接排队上限，满了拒绝新连接
+    "max_queued_connections": 32,
+    // HTTP 请求头大小上限，超过返回 431
+    "max_header_bytes": 65536
+  },
+
+  "session": {
+    // 「接收中」会话的存活时长（小时）。超过没收完则标记过期；0 表示不过期
+    "receiving_ttl_hours": 24
+  },
+
+  "install": {
+    // 安装引擎。当前构建只支持 "disabled"（只收包验证，不真正安装）
+    "engine": "disabled"
+  }
+}

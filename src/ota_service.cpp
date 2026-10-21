@@ -410,6 +410,9 @@ OtaService::CreateResult OtaService::create_or_resume_session(
       }
       log_info("resuming OTA session " + existing->session_id + " for package_id " +
                existing->package_id);
+      log_upgrade("session=" + existing->session_id +
+                  " package=" + existing->package_id +
+                  " version=" + existing->manifest.version + " event=RESUMED");
       return CreateResult{false, session_json(*existing)};
     }
     package_index_.erase(package);
@@ -447,6 +450,9 @@ OtaService::CreateResult OtaService::create_or_resume_session(
   package_index_[package_id] = id;
   log_info("created OTA session " + id + " for package_id " + package_id +
            ", total=" + std::to_string(shared->total));
+  log_upgrade("session=" + id + " package=" + package_id +
+              " version=" + shared->manifest.version +
+              " event=CREATED total=" + std::to_string(shared->total));
   return CreateResult{true, session_json(*shared)};
 }
 
@@ -533,6 +539,11 @@ uint64_t OtaService::patch_payload(const std::string& session_id,
 
   const uint64_t new_offset = record->offset;
   if (completes) {
+    log_info("session " + session_id + " payload complete, verifying");
+    log_upgrade("session=" + session_id + " package=" + record->package_id +
+                " version=" + record->manifest.version +
+                " event=PAYLOAD_RECEIVED total=" +
+                std::to_string(record->total));
     enqueue_verification(session_id);
   }
   return new_offset;
@@ -605,6 +616,12 @@ OtaService::InstallResult OtaService::install(const std::string& session_id,
     throw OtaError(500, "STORAGE_ERROR",
                    std::string("failed to persist INSTALLING: ") + e.what());
   }
+  log_info("session " + record->session_id + " install started, install_id=" +
+           record->install_id);
+  log_upgrade("session=" + record->session_id +
+              " package=" + record->package_id +
+              " version=" + record->manifest.version +
+              " event=INSTALL_STARTED install_id=" + record->install_id);
   lock.unlock();
 
   InstallStartResult start_result = InstallStartResult::Unknown;
@@ -640,6 +657,14 @@ OtaService::InstallResult OtaService::install(const std::string& session_id,
       } catch (const std::exception& e) {
         log_error("failed to persist INSTALL_REJECTED: " + std::string(e.what()));
       }
+      log_warn("session " + record->session_id + " install rejected: " +
+               (start_error.empty() ? "unknown reason" : start_error));
+      log_upgrade("session=" + record->session_id +
+                  " package=" + record->package_id +
+                  " version=" + record->manifest.version +
+                  " event=INSTALL_REJECTED reason=" +
+                  (start_error.empty() ? "unknown"
+                                       : truncate_message(start_error, 256)));
       return InstallResult{200, session_json(*record)};
     case InstallStartResult::Unsupported:
       record->state = SessionState::Ready;
@@ -663,6 +688,14 @@ OtaService::InstallResult OtaService::install(const std::string& session_id,
       } catch (const std::exception& e) {
         log_error("failed to persist RECOVERY_REQUIRED: " + std::string(e.what()));
       }
+      log_error("session " + record->session_id + " install state unknown: " +
+                (start_error.empty() ? "no detail" : start_error));
+      log_upgrade("session=" + record->session_id +
+                  " package=" + record->package_id +
+                  " version=" + record->manifest.version +
+                  " event=INSTALL_STATE_UNKNOWN reason=" +
+                  (start_error.empty() ? "unknown"
+                                       : truncate_message(start_error, 256)));
       return InstallResult{200, session_json(*record)};
   }
   throw OtaError(500, "INTERNAL_ERROR", "unreachable install state");
@@ -775,6 +808,8 @@ void OtaService::verify_session(const std::string& session_id) {
       throw CryptoError(std::string("failed to persist READY: ") + e.what());
     }
     log_info("session " + session_id + " verified and READY");
+    log_upgrade("session=" + session_id + " package=" + record->package_id +
+                " version=" + record->manifest.version + " event=VERIFIED");
   } catch (...) {
     remove_file_if_exists(tmp_path);
     if (!dek.empty()) {
@@ -804,6 +839,9 @@ void OtaService::mark_verification_failed(const std::string& session_id,
   }
   store_->remove_firmware(session_id);
   log_error("session " + session_id + " FAILED: " + message);
+  log_upgrade("session=" + session_id + " package=" + record->package_id +
+              " version=" + record->manifest.version + " event=VERIFY_FAILED reason=" +
+              truncate_message(message, 256));
 }
 
 void OtaService::expire_sessions() {
@@ -829,6 +867,9 @@ void OtaService::expire_sessions() {
     try {
       store_->save(*record);
       log_warn("session " + record->session_id + " expired");
+      log_upgrade("session=" + record->session_id +
+                  " package=" + record->package_id +
+                  " version=" + record->manifest.version + " event=EXPIRED");
     } catch (const std::exception& e) {
       log_error("failed to persist EXPIRED for " + record->session_id + ": " +
                 e.what());
@@ -891,6 +932,16 @@ void OtaService::refresh_install_state(const std::string& session_id) {
                     std::string(e.what()));
         }
       }
+      log_info("session " + record->session_id + " install succeeded" +
+               (status.running_version.empty()
+                    ? ""
+                    : " running_version=" + status.running_version));
+      log_upgrade("session=" + record->session_id +
+                  " package=" + record->package_id +
+                  " version=" + record->manifest.version + " event=INSTALL_SUCCESS" +
+                  (status.running_version.empty()
+                       ? ""
+                       : " running_version=" + status.running_version));
       break;
     case InstallStatus::State::Failed:
       record->state = SessionState::Failed;
@@ -898,6 +949,15 @@ void OtaService::refresh_install_state(const std::string& session_id) {
           status.error_code.empty() ? "INSTALL_FAILED" : status.error_code,
           status.message);
       record->updated_at = now_rfc3339();
+      log_error("session " + record->session_id + " install failed: " +
+                status.message);
+      log_upgrade("session=" + record->session_id +
+                  " package=" + record->package_id +
+                  " version=" + record->manifest.version +
+                  " event=INSTALL_FAILED code=" +
+                  (status.error_code.empty() ? "INSTALL_FAILED"
+                                             : status.error_code) +
+                  " reason=" + truncate_message(status.message, 256));
       break;
     case InstallStatus::State::Unknown:
       record->state = SessionState::RecoveryRequired;
@@ -907,6 +967,13 @@ void OtaService::refresh_install_state(const std::string& session_id) {
               ? "the install engine cannot confirm the task state"
               : status.message);
       record->updated_at = now_rfc3339();
+      log_error("session " + record->session_id + " install state unknown: " +
+                status.message);
+      log_upgrade("session=" + record->session_id +
+                  " package=" + record->package_id +
+                  " version=" + record->manifest.version +
+                  " event=INSTALL_STATE_UNKNOWN reason=" +
+                  truncate_message(status.message, 256));
       break;
   }
   try {

@@ -57,6 +57,12 @@ struct InstallConfig {
   std::string engine = "disabled";
 };
 
+struct LogConfig {
+  // Where the server writes its runtime log (server.log) and upgrade records
+  // (ota.log). Empty disables file logging (stderr only).
+  std::string dir = "/unitree/var/log/robot_offline_server";
+};
+
 struct AppConfig {
   std::string config_dir;
   std::string data_dir = "./data";
@@ -67,6 +73,7 @@ struct AppConfig {
   HttpConfig http;
   SessionConfig session;
   InstallConfig install;
+  LogConfig log;
 };
 
 // Throws std::runtime_error with a human readable message on invalid input.
