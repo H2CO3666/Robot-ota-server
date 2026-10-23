@@ -6,3 +6,6 @@ data/
 *.pem
 *.key
 *.log
+
+# generated real-KMS test bundles
+out/

@@ -678,6 +678,10 @@ void CertVerifier::verify(const Bytes& leaf_der, const std::string& scheme,
   if (!impl_->check_time) {
     X509_STORE_CTX_set_flags(ctx, X509_V_FLAG_NO_CHECK_TIME);
   }
+  // The configured platform CA is the trust anchor. It may itself have been
+  // issued by a root that is not shipped in the bundle (the manifest bundle
+  // only carries the signer leaf), so accept a chain that terminates at it.
+  X509_STORE_CTX_set_flags(ctx, X509_V_FLAG_PARTIAL_CHAIN);
   if (X509_verify_cert(ctx) != 1) {
     const int error = X509_STORE_CTX_get_error(ctx);
     throw CryptoError(std::string("signer certificate chain rejected: ") +
@@ -701,6 +705,57 @@ void CertVerifier::verify(const Bytes& leaf_der, const std::string& scheme,
 
 std::unique_ptr<IDeviceKey> make_software_device_key(const std::string& pem_path) {
   return std::unique_ptr<IDeviceKey>(new SoftwareDeviceKey(pem_path));
+}
+
+std::string rsa_public_key_pem(const Bytes& modulus, const Bytes& exponent) {
+  if (modulus.empty() || exponent.empty()) {
+    throw CryptoError("cannot serialize an empty RSA public key");
+  }
+  BIGNUM* n = BN_bin2bn(modulus.data(), static_cast<int>(modulus.size()), nullptr);
+  BIGNUM* e = BN_bin2bn(exponent.data(), static_cast<int>(exponent.size()), nullptr);
+  if (n == nullptr || e == nullptr) {
+    BN_free(n);
+    BN_free(e);
+    throw CryptoError("BN_bin2bn failed: " + openssl_errors());
+  }
+  RSA* rsa = RSA_new();
+  if (rsa == nullptr) {
+    BN_free(n);
+    BN_free(e);
+    throw CryptoError("RSA_new failed: " + openssl_errors());
+  }
+  if (RSA_set0_key(rsa, n, e, nullptr) != 1) {
+    BN_free(n);
+    BN_free(e);
+    RSA_free(rsa);
+    throw CryptoError("RSA_set0_key failed: " + openssl_errors());
+  }
+  // RSA_set0_key took ownership of n and e.
+  EVP_PKEY* pkey = EVP_PKEY_new();
+  if (pkey == nullptr || EVP_PKEY_assign_RSA(pkey, rsa) != 1) {
+    EVP_PKEY_free(pkey);
+    RSA_free(rsa);
+    throw CryptoError("EVP_PKEY_assign_RSA failed: " + openssl_errors());
+  }
+  BIO* bio = BIO_new(BIO_s_mem());
+  if (bio == nullptr) {
+    EVP_PKEY_free(pkey);
+    throw CryptoError("BIO_new failed: " + openssl_errors());
+  }
+  if (PEM_write_bio_PUBKEY(bio, pkey) != 1) {
+    BIO_free(bio);
+    EVP_PKEY_free(pkey);
+    throw CryptoError("PEM_write_bio_PUBKEY failed: " + openssl_errors());
+  }
+  char* data = nullptr;
+  const long length = BIO_get_mem_data(bio, &data);
+  std::string pem = length > 0 ? std::string(data, static_cast<size_t>(length)) : "";
+  BIO_free(bio);
+  EVP_PKEY_free(pkey);
+  if (pem.empty()) {
+    throw CryptoError("PEM serialization produced an empty key");
+  }
+  return pem;
 }
 
 }  // namespace robot_ota

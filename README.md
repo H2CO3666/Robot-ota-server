@@ -209,6 +209,10 @@ sign_domain_prefix (UTF-8 bytes) || 0x00 || JCS(manifest)
   而是防止签名被跨协议复用的域分隔标记。
 - 默认 `RSA_PKCS1_SHA256`（PKCS#1 v1.5），可选 `RSA_PSS_SHA256`。
 - 签名证书必须能通过 `plat_ca_file` 链式验证（`check_cert_validity` 控制有效期检查）。
+  - `plat_ca_file` 是**信任锚**：链路可以终止在这张证书上，不要求它是自签名根。
+    这对应 `X509_V_FLAG_PARTIAL_CHAIN`，也是只带 `signer_cert` 的 Bundle 能工作的前提
+    （生产链通常是 `signer ← PLAT_CA ← ROOT_CA`，Bundle 里没有中间证书）。
+  - 如果配置文件里放的是多证书 PEM，`X509_STORE_load_locations` 会把它们都作为信任材料加载。
 - 设备绑定：
   - Manifest 的 `robot_sn` == `device.robot_sn`
   - `recipient_spki_sha256` == 设备公钥 SPKI 的 SHA-256
@@ -237,6 +241,16 @@ sign_domain_prefix (UTF-8 bytes) || 0x00 || JCS(manifest)
 
 SE 只执行原始 RSA 私钥运算（`SE_InternalPrivateKeyOperation_RSA`），
 OAEP-SHA256 解码由软件完成（`oaep_sha256_decode`），与协议要求一致。
+
+### 导出设备公钥（云端封装 DEK 用）
+
+```bash
+./robot-ota-server --config /etc/robot-ota/server.json --export-device-pubkey /tmp/robot_pub.pem
+```
+
+- `software` 与 `se` 两种模式都支持；SE 模式走 `SE_ExportSignPublicKey_RSA`（`se.key_index`）。
+- 输出 SubjectPublicKeyInfo PEM 和 `recipient_spki_sha256`，然后退出，不启动 HTTP 服务。
+- 云端必须把 32 字节 DEK 封装到**这把公钥**上；只拿到 SPKI 哈希无法生成设备包。
 
 SDK 参考：`/home/unitree/工作中转文件夹/安全芯片SDK`（`se_sdk.h`、`sesdk_test.c`、手册）。
 

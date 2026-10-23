@@ -84,6 +84,11 @@ class IDeviceKey {
 
 std::unique_ptr<IDeviceKey> make_software_device_key(const std::string& pem_path);
 
+// Serializes an RSA public key (big-endian modulus and exponent) as a
+// SubjectPublicKeyInfo PEM. Used to export the SE public key for the cloud,
+// which must wrap the DEK to exactly this key.
+std::string rsa_public_key_pem(const Bytes& modulus, const Bytes& exponent);
+
 struct SeOptions {
   std::string lib_path;
   int key_index = 1;
