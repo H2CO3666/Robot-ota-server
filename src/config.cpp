@@ -295,6 +295,9 @@ void validate_config(AppConfig& cfg) {
   if (cfg.session.receiving_ttl_hours > 24U * 365U) {
     throw std::runtime_error("session.receiving_ttl_hours is too large");
   }
+  if (cfg.session.ready_ttl_hours > 24U * 365U) {
+    throw std::runtime_error("session.ready_ttl_hours is too large");
+  }
   if (cfg.install.engine != "disabled") {
     throw std::runtime_error(
         "install.engine: this build only supports 'disabled' (install execution is "
@@ -413,6 +416,13 @@ AppConfig load_config(const std::string& path) {
       throw std::runtime_error("session.receiving_ttl_hours is too large");
     }
     cfg.session.receiving_ttl_hours = static_cast<uint32_t>(ttl);
+
+    const uint64_t ready_ttl =
+        get_u64(session, "ready_ttl_hours", cfg.session.ready_ttl_hours);
+    if (ready_ttl > 24ULL * 365ULL) {
+      throw std::runtime_error("session.ready_ttl_hours is too large");
+    }
+    cfg.session.ready_ttl_hours = static_cast<uint32_t>(ready_ttl);
   }
 
   const Json::Value& install = get_object(root, "install");

@@ -47,8 +47,14 @@ struct HttpConfig {
 };
 
 struct SessionConfig {
-  // 0 disables expiration. Only RECEIVING sessions expire.
+  // 0 disables expiration. Only RECEIVING sessions expire. Measured in
+  // cumulative powered-on time, not wall-clock time.
   uint32_t receiving_ttl_hours = 0;
+  // A verified-but-not-installed (READY) session whose firmware is not
+  // installed within this many hours of cumulative powered-on time is expired
+  // and its package files (payload.enc + firmware.bin) are deleted.
+  // 0 disables expiration.
+  uint32_t ready_ttl_hours = 6;
 };
 
 struct InstallConfig {

@@ -44,6 +44,7 @@ OtaService::OtaService(AppConfig config)
     : config_(std::move(config)),
       store_(std::make_unique<SessionStore>(config_.data_dir)) {
   store_->init();
+  load_uptime_base();
   load_or_init_min_security_version();
 
   if (config_.crypto.key_provider == "software") {
@@ -114,6 +115,56 @@ void OtaService::persist_min_security_version(uint64_t value) {
   write_file_atomic(path, std::to_string(value) + "\n", 0600);
 }
 
+void OtaService::load_uptime_base() {
+  const std::string path =
+      join_path(join_path(config_.data_dir, "state"), "uptime_base");
+  uint64_t value = 0;
+  if (file_exists(path)) {
+    const std::string text =
+        trim_ascii_whitespace(read_text_file_limited(path, 64));
+    if (!parse_u64(text, &value)) {
+      throw std::runtime_error("invalid uptime_base file: " + path);
+    }
+  }
+  std::lock_guard<std::mutex> lock(uptime_mutex_);
+  uptime_base_ = static_cast<int64_t>(value);
+  uptime_monotonic_base_ = std::chrono::steady_clock::now();
+  uptime_last_persisted_ = uptime_base_;
+}
+
+int64_t OtaService::cumulative_uptime_seconds() {
+  std::lock_guard<std::mutex> lock(uptime_mutex_);
+  const int64_t elapsed = static_cast<int64_t>(
+      std::chrono::duration_cast<std::chrono::seconds>(
+          std::chrono::steady_clock::now() - uptime_monotonic_base_)
+          .count());
+  return uptime_base_ + elapsed;
+}
+
+void OtaService::persist_uptime_base_if_due() {
+  std::lock_guard<std::mutex> lock(uptime_mutex_);
+  const auto now = std::chrono::steady_clock::now();
+  const int64_t total = uptime_base_ +
+                        static_cast<int64_t>(
+                            std::chrono::duration_cast<std::chrono::seconds>(
+                                now - uptime_monotonic_base_)
+                                .count());
+  if (total - uptime_last_persisted_ < 60) {
+    return;
+  }
+  try {
+    write_file_atomic(
+        join_path(join_path(config_.data_dir, "state"), "uptime_base"),
+        std::to_string(total) + "\n", 0600);
+  } catch (const std::exception& e) {
+    log_error("failed to persist uptime_base: " + std::string(e.what()));
+    return;
+  }
+  uptime_base_ = total;
+  uptime_monotonic_base_ = now;
+  uptime_last_persisted_ = total;
+}
+
 void OtaService::recover_sessions() {
   const ManifestLimits limits{config_.device.max_plaintext_bytes};
   std::vector<SessionRecord> records = store_->load_all(limits);
@@ -126,6 +177,7 @@ void OtaService::recover_sessions() {
     record->updated_at = now_rfc3339();
     try {
       store_->save(*record);
+      remove_package_artifacts(record->session_id);
     } catch (const std::exception& e) {
       log_error("failed to persist a recovery failure for " +
                 record->session_id + ": " + e.what());
@@ -199,9 +251,16 @@ void OtaService::recover_sessions() {
         }
         case SessionState::Success:
           raised_min = std::max(raised_min, record.manifest.security_version);
+          // A crash between persisting SUCCESS and the runtime cleanup can leave
+          // the package artifacts behind; finish the removal during recovery.
+          remove_package_artifacts(id);
           break;
         case SessionState::Failed:
         case SessionState::Expired:
+          // Terminal sessions may still hold package artifacts from before a
+          // crash; finish the cleanup the runtime transition should have done.
+          remove_package_artifacts(id);
+          break;
         case SessionState::RecoveryRequired:
           break;
       }
@@ -220,7 +279,7 @@ void OtaService::recover_sessions() {
                "; keeping the newest for resume lookup");
       const auto other = sessions_.find(existing->second);
       if (other == sessions_.end() ||
-          shared->created_at_unix > other->second->created_at_unix) {
+          shared->created_at_uptime > other->second->created_at_uptime) {
         existing->second = shared->session_id;
       }
     }
@@ -433,7 +492,7 @@ OtaService::CreateResult OtaService::create_or_resume_session(
   record.offset = 0;
   record.total = verified.manifest.ciphertext_size;
   record.created_at = now_rfc3339();
-  record.created_at_unix = now_unix_seconds();
+  record.created_at_uptime = cumulative_uptime_seconds();
   record.updated_at = record.created_at;
 
   try {
@@ -654,6 +713,7 @@ OtaService::InstallResult OtaService::install(const std::string& session_id,
       record->updated_at = now_rfc3339();
       try {
         store_->save(*record);
+        remove_package_artifacts(record->session_id);
       } catch (const std::exception& e) {
         log_error("failed to persist INSTALL_REJECTED: " + std::string(e.what()));
       }
@@ -801,6 +861,7 @@ void OtaService::verify_session(const std::string& session_id) {
     record->state = SessionState::Ready;
     record->offset = record->total;
     record->result = Json::Value(Json::nullValue);
+    record->ready_at_uptime = cumulative_uptime_seconds();
     record->updated_at = now_rfc3339();
     try {
       store_->save(*record);
@@ -837,39 +898,63 @@ void OtaService::mark_verification_failed(const std::string& session_id,
   } catch (const std::exception& e) {
     log_error("failed to persist VERIFY_FAILED for " + session_id + ": " + e.what());
   }
-  store_->remove_firmware(session_id);
+  remove_package_artifacts(session_id);
   log_error("session " + session_id + " FAILED: " + message);
   log_upgrade("session=" + session_id + " package=" + record->package_id +
               " version=" + record->manifest.version + " event=VERIFY_FAILED reason=" +
               truncate_message(message, 256));
 }
 
-void OtaService::expire_sessions() {
-  if (config_.session.receiving_ttl_hours == 0) {
-    return;
+void OtaService::remove_package_artifacts(const std::string& session_id) {
+  try {
+    store_->remove_payload(session_id);
+    store_->remove_firmware(session_id);
+    fsync_dir(store_->session_dir(session_id));
+  } catch (const std::exception& e) {
+    log_error("failed to remove package artifacts for " + session_id + ": " +
+              e.what());
   }
-  const int64_t ttl_seconds =
+}
+
+void OtaService::expire_sessions() {
+  const int64_t receiving_ttl_seconds =
       static_cast<int64_t>(config_.session.receiving_ttl_hours) * 3600;
-  const int64_t now = now_unix_seconds();
+  const int64_t ready_ttl_seconds =
+      static_cast<int64_t>(config_.session.ready_ttl_hours) * 3600;
+  const int64_t now = cumulative_uptime_seconds();
   std::lock_guard<std::mutex> lock(mutex_);
   for (auto& entry : sessions_) {
     const std::shared_ptr<SessionRecord>& record = entry.second;
-    if (record->state != SessionState::Receiving) {
+
+    std::string code;
+    std::string reason;
+    if (record->state == SessionState::Receiving &&
+        config_.session.receiving_ttl_hours > 0 &&
+        record->created_at_uptime > 0 &&
+        now - record->created_at_uptime > receiving_ttl_seconds) {
+      code = "SESSION_EXPIRED";
+      reason = "receiving TTL expired";
+    } else if (record->state == SessionState::Ready &&
+               config_.session.ready_ttl_hours > 0 &&
+               record->ready_at_uptime > 0 &&
+               now - record->ready_at_uptime > ready_ttl_seconds) {
+      code = "READY_EXPIRED";
+      reason = "firmware was not installed within the ready TTL";
+    } else {
       continue;
     }
-    if (now - record->created_at_unix <= ttl_seconds) {
-      continue;
-    }
+
     record->state = SessionState::Expired;
-    record->result =
-        result_object("SESSION_EXPIRED", "receiving TTL expired");
+    record->result = result_object(code, reason);
     record->updated_at = now_rfc3339();
     try {
       store_->save(*record);
-      log_warn("session " + record->session_id + " expired");
+      remove_package_artifacts(record->session_id);
+      log_warn("session " + record->session_id + " expired: " + reason);
       log_upgrade("session=" + record->session_id +
                   " package=" + record->package_id +
-                  " version=" + record->manifest.version + " event=EXPIRED");
+                  " version=" + record->manifest.version +
+                  " event=EXPIRED reason=" + reason);
     } catch (const std::exception& e) {
       log_error("failed to persist EXPIRED for " + record->session_id + ": " +
                 e.what());
@@ -976,11 +1061,20 @@ void OtaService::refresh_install_state(const std::string& session_id) {
                   truncate_message(status.message, 256));
       break;
   }
+  bool persisted = true;
   try {
     store_->save(*record);
   } catch (const std::exception& e) {
+    persisted = false;
     log_error("failed to persist install state for " + session_id + ": " +
               e.what());
+  }
+
+  if (persisted && (record->state == SessionState::Success ||
+                    record->state == SessionState::Failed)) {
+    // Terminal state: the ciphertext and plaintext artifacts are no longer
+    // needed. meta.json is kept for the audit trail and anti-rollback recovery.
+    remove_package_artifacts(session_id);
   }
 }
 
@@ -992,6 +1086,7 @@ void OtaService::housekeeping_worker() {
       break;
     }
     lock.unlock();
+    persist_uptime_base_if_due();
     expire_sessions();
     if (engine_->enabled()) {
       std::vector<std::string> installing;

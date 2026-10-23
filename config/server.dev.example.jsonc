@@ -54,7 +54,11 @@
 
   "session": {
     // 「接收中」会话的存活时长（小时）。超过没收完则标记过期；0 表示不过期
-    "receiving_ttl_hours": 24
+    "receiving_ttl_hours": 6,
+    // 「已校验、待安装」会话的存活时长（小时）。下载成功但累计开机时间超过
+    // 此时长仍未安装，则删除固件包（payload.enc + firmware.bin）并标记过期；
+    // 0 表示不过期
+    "ready_ttl_hours": 6
   },
 
   "install": {

@@ -259,7 +259,8 @@ void SessionStore::save(const SessionRecord& record) {
   meta["total"] = Json::Value::UInt64(record.total);
   meta["result"] = record.result;
   meta["created_at"] = record.created_at;
-  meta["created_at_unix"] = Json::Value::Int64(record.created_at_unix);
+  meta["created_at_uptime"] = Json::Value::Int64(record.created_at_uptime);
+  meta["ready_at_uptime"] = Json::Value::Int64(record.ready_at_uptime);
   meta["updated_at"] = record.updated_at;
   meta["install_id"] = record.install_id;
   meta["security_version"] =
@@ -351,8 +352,18 @@ std::vector<SessionRecord> SessionStore::load_all(const ManifestLimits& limits) 
       }
       record.result = result;
       record.created_at = required_string(meta, "created_at", "meta");
-      record.created_at_unix = static_cast<int64_t>(
-          required_u64(meta, "created_at_unix", "meta"));
+      if (meta.isMember("created_at_uptime")) {
+        record.created_at_uptime = static_cast<int64_t>(
+            required_u64(meta, "created_at_uptime", "meta"));
+      } else {
+        record.created_at_uptime = 0;
+      }
+      if (meta.isMember("ready_at_uptime")) {
+        record.ready_at_uptime = static_cast<int64_t>(
+            required_u64(meta, "ready_at_uptime", "meta"));
+      } else {
+        record.ready_at_uptime = 0;
+      }
       record.updated_at = required_string(meta, "updated_at", "meta");
       record.install_id = required_string(meta, "install_id", "meta");
       records.push_back(std::move(record));
@@ -413,6 +424,10 @@ void SessionStore::truncate_payload(const std::string& session_id,
 void SessionStore::remove_firmware(const std::string& session_id) {
   remove_file_if_exists(firmware_path(session_id));
   remove_file_if_exists(firmware_path(session_id) + ".tmp");
+}
+
+void SessionStore::remove_payload(const std::string& session_id) {
+  remove_file_if_exists(payload_path(session_id));
 }
 
 std::string SessionStore::quarantine(const std::string& session_id) {

@@ -39,7 +39,8 @@ struct SessionRecord {
   uint64_t total = 0;
   Json::Value result = Json::Value(Json::nullValue);
   std::string created_at;
-  int64_t created_at_unix = 0;
+  int64_t created_at_uptime = 0;  // cumulative powered-on seconds at creation
+  int64_t ready_at_uptime = 0;    // cumulative powered-on seconds at READY
   std::string updated_at;
   std::string install_id;
 };
@@ -76,6 +77,7 @@ class SessionStore {
   bool payload_exists(const std::string& session_id) const;
 
   void remove_firmware(const std::string& session_id);
+  void remove_payload(const std::string& session_id);
 
   std::string session_dir(const std::string& session_id) const;
   std::string payload_path(const std::string& session_id) const;

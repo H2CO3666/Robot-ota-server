@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -85,6 +86,12 @@ class OtaService {
   void housekeeping_worker();
   void expire_sessions();
   void refresh_install_state(const std::string& session_id);
+  void remove_package_artifacts(const std::string& session_id);
+
+  // Cumulative powered-on time (survives reboots) used by the TTLs.
+  void load_uptime_base();
+  int64_t cumulative_uptime_seconds();
+  void persist_uptime_base_if_due();
 
   AppConfig config_;
   std::unique_ptr<SessionStore> store_;
@@ -96,6 +103,12 @@ class OtaService {
   std::unordered_map<std::string, std::shared_ptr<SessionRecord>> sessions_;
   std::unordered_map<std::string, std::string> package_index_;
   uint64_t min_security_version_ = 0;
+
+  // Cumulative powered-on time (seconds) that keeps counting across reboots.
+  mutable std::mutex uptime_mutex_;
+  int64_t uptime_base_ = 0;
+  std::chrono::steady_clock::time_point uptime_monotonic_base_;
+  int64_t uptime_last_persisted_ = 0;
 
   std::thread verify_thread_;
   std::mutex verify_mutex_;
